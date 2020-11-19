@@ -14,7 +14,7 @@ import (
 	"github.com/olahol/melody"
 )
 
-const TIMEDIFF = 100 //5秒
+const TIMEDIFF = 5 //5秒
 
 var mq list.List
 var rwlock sync.RWMutex
