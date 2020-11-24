@@ -14,12 +14,15 @@ import (
 	"github.com/olahol/melody"
 )
 
-const TIMEDIFF = 5 //5秒
+const TIMEDIFF = 100 //5秒
 
-var mq list.List
-var rwlock sync.RWMutex
-var popularMq list.List
-var connectTimeHolder sync.Map
+var mqLock sync.RWMutex
+var pmqLock sync.RWMutex
+
+var historyMsgHolder list.List                         //保留最新50记录子消息队列
+var popularMsgHolder list.List                         //统计5秒词频子消息队列
+var messageQueue chan string = make(chan string, 1000) //主消息队列, 默认长度为1000
+var connectTimeHolder sync.Map                         //客户端连接时间
 
 func main() {
 	r := gin.Default()
@@ -33,17 +36,20 @@ func main() {
 		m.HandleRequest(c.Writer, c.Request)
 	})
 
+	go distriMessage()
+
 	m.HandleMessage(func(s *melody.Session, msg []byte) {
+
 		switch strings.TrimSpace(string(msg)) {
 		case "/clear":
 			//清空历史消息，方便测试
-			rwlock.Lock()
-			defer rwlock.Unlock()
-			mq = list.List{}
+			mqLock.Lock()
+			defer mqLock.Unlock()
+			historyMsgHolder = list.List{}
 
 		case "/popular":
-			rwlock.RLock()
-			defer rwlock.RUnlock()
+			pmqLock.RLock()
+			defer pmqLock.RUnlock()
 
 			w := getMostPopularWord()
 			s.Write([]byte("/popular " + w))
@@ -64,51 +70,63 @@ func main() {
 			}
 
 		default:
-			rwlock.Lock()
-			defer rwlock.Unlock()
-
-			//存入最新50条记录
-			mq.PushFront([]byte(msgFilter(string(msg))))
-			//修剪队列长度
-			if mq.Len() > 50 {
-				mq.Remove(mq.Back())
-			}
-
-			//存入最新5秒记录
-			popularMq.PushFront(Message{
-				Msg:       string(msg),
-				timestamp: time.Now().Unix(),
-			})
-
-			//修剪队列长度
-			for popularMq.Back() != nil && time.Now().Unix()-popularMq.Back().Value.(Message).timestamp > TIMEDIFF {
-				popularMq.Remove(popularMq.Back())
-			}
-
+			messageQueue <- string(msg)
 			m.Broadcast([]byte(msgFilter(string(msg))))
+			fmt.Printf("%+v", popularMsgHolder)
 		}
 	})
 
 	m.HandleConnect(func(s *melody.Session) {
-		fmt.Println(s.Keys)
 		uid := uuid.New().String()
 		s.Set("uid", uid)
 
 		connectTimeHolder.Store(uid, time.Now().Unix())
-		// connectTimeHolder.Range(func(key, value interface{}) bool {
-		// 	fmt.Printf("%v : %v", key, value)
-		// 	return true
-		// })
-		rwlock.RLock()
-		defer rwlock.RUnlock()
 
-		for e := mq.Back(); e != nil; e = e.Prev() {
+		mqLock.RLock()
+		defer mqLock.RUnlock()
+
+		//读取mq队列消息（50条）
+		for e := historyMsgHolder.Back(); e != nil; e = e.Prev() {
 			msg := e.Value.([]byte)
 			s.Write(msg)
 		}
 	})
 
 	r.Run(":5000")
+}
+
+//分发消息到不同的子消息队列
+func distriMessage() {
+	for {
+		doDistribute()
+	}
+}
+
+func doDistribute() {
+	msg := <-messageQueue
+
+	mqLock.Lock()
+	defer mqLock.Unlock()
+
+	//存入最新50条记录
+	historyMsgHolder.PushFront([]byte(msgFilter(msg)))
+	//修剪队列长度
+	if historyMsgHolder.Len() > 50 {
+		historyMsgHolder.Remove(historyMsgHolder.Back())
+	}
+
+	pmqLock.Lock()
+	defer pmqLock.Unlock()
+	//存入最新5秒记录
+	popularMsgHolder.PushFront(Message{
+		Msg:       msg,
+		timestamp: time.Now().Unix(),
+	})
+
+	//修剪队列长度
+	for popularMsgHolder.Back() != nil && time.Now().Unix()-popularMsgHolder.Back().Value.(Message).timestamp > TIMEDIFF {
+		popularMsgHolder.Remove(popularMsgHolder.Back())
+	}
 }
 
 func msgFilter(msg string) string {
@@ -125,10 +143,10 @@ func msgFilter(msg string) string {
 func getMostPopularWord() string {
 	timestamp := time.Now().Unix()
 	m := make(map[string]int)
-	for e := popularMq.Front(); e != nil; e = e.Next() {
+	for e := popularMsgHolder.Front(); e != nil; e = e.Next() {
 		msg := e.Value.(Message)
 
-		//过滤超过5秒的消息
+		// 过滤超过5秒的消息
 		if timestamp-msg.timestamp > TIMEDIFF {
 			break
 		}
