@@ -188,3 +188,17 @@ func fillHistory() {
 	c.WriteMessage(websocket.TextMessage, []byte("test 3"))
 	c.WriteMessage(websocket.TextMessage, []byte("test 4"))
 }
+
+func BenchmarkConn(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+
+		c, err := conn()
+		if err != nil {
+			b.Fatal(err)
+			return
+		}
+		defer c.Close()
+
+		c.WriteMessage(websocket.TextMessage, []byte("test"))
+	}
+}

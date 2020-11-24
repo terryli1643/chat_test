@@ -81,7 +81,7 @@ func main() {
 			})
 
 			//修剪队列长度
-			if popularMq.Back() != nil && time.Now().Unix()-popularMq.Back().Value.(Message).timestamp > TIMEDIFF {
+			for popularMq.Back() != nil && time.Now().Unix()-popularMq.Back().Value.(Message).timestamp > TIMEDIFF {
 				popularMq.Remove(popularMq.Back())
 			}
 
@@ -95,10 +95,10 @@ func main() {
 		s.Set("uid", uid)
 
 		connectTimeHolder.Store(uid, time.Now().Unix())
-		connectTimeHolder.Range(func(key, value interface{}) bool {
-			fmt.Printf("%v : %v", key, value)
-			return true
-		})
+		// connectTimeHolder.Range(func(key, value interface{}) bool {
+		// 	fmt.Printf("%v : %v", key, value)
+		// 	return true
+		// })
 		rwlock.RLock()
 		defer rwlock.RUnlock()
 
