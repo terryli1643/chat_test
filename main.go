@@ -14,15 +14,16 @@ import (
 	"github.com/olahol/melody"
 )
 
-const TIMEDIFF = 100 //5秒
+const TIMEDIFF = 5 //5秒
 
 var mqLock sync.RWMutex
 var pmqLock sync.RWMutex
 
-var historyMsgHolder list.List                         //保留最新50记录子消息队列
-var popularMsgHolder list.List                         //统计5秒词频子消息队列
-var messageQueue chan string = make(chan string, 1000) //主消息队列, 默认长度为1000
-var connectTimeHolder sync.Map                         //客户端连接时间
+var historyMsgHolder list.List                           //保留最新50记录子消息队列
+var popularMsgHolder list.List                           //统计5秒词频子消息队列
+var messageQueue chan string = make(chan string, 1000)   //主消息队列, 默认长度为1000
+var boradcastQueue chan string = make(chan string, 1000) //广播消息队列, 默认长度为1000
+var connectTimeHolder sync.Map                           //客户端连接时间
 
 func main() {
 	r := gin.Default()
@@ -36,10 +37,19 @@ func main() {
 		m.HandleRequest(c.Writer, c.Request)
 	})
 
-	go distriMessage()
+	go func() {
+		for {
+			doDistribute()
+		}
+	}()
+	go func() {
+		for {
+			msg := <-boradcastQueue
+			m.Broadcast([]byte(msg))
+		}
+	}()
 
 	m.HandleMessage(func(s *melody.Session, msg []byte) {
-
 		switch strings.TrimSpace(string(msg)) {
 		case "/clear":
 			//清空历史消息，方便测试
@@ -71,8 +81,6 @@ func main() {
 
 		default:
 			messageQueue <- string(msg)
-			m.Broadcast([]byte(msgFilter(string(msg))))
-			fmt.Printf("%+v", popularMsgHolder)
 		}
 	})
 
@@ -96,12 +104,6 @@ func main() {
 }
 
 //分发消息到不同的子消息队列
-func distriMessage() {
-	for {
-		doDistribute()
-	}
-}
-
 func doDistribute() {
 	msg := <-messageQueue
 
@@ -127,6 +129,8 @@ func doDistribute() {
 	for popularMsgHolder.Back() != nil && time.Now().Unix()-popularMsgHolder.Back().Value.(Message).timestamp > TIMEDIFF {
 		popularMsgHolder.Remove(popularMsgHolder.Back())
 	}
+
+	boradcastQueue <- msg
 }
 
 func msgFilter(msg string) string {
